@@ -9,13 +9,13 @@
 
 With conda (recommended):
 
-```
+```shell
 conda install -c conda-forge dask numba xarray
 pip install jaxtyping
 ```
 
 ## Install package into environment in editable/development mode
-```
+```shell
 pip install -e /path/to/this/folder
 ```
 
@@ -31,4 +31,3 @@ extractor = FeatureExtractor(n_jobs=-1, fs = 4096)
 extractor = calculate_features(X) # X is an array of shape (n_epochs x n_channels x n_samples)
 features = extractor.features
 ```
-
