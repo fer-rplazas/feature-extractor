@@ -1,15 +1,17 @@
+import warnings
+
 import numpy as np
 import xarray as xr
 from dask import compute, delayed
 from jaxtyping import Float
 
-from .utils import create_trailing_frames
-from .time_domain import TimeDomainFeatureExtractor
 from .cepstral import CepstralFeatureExtractor
-from .periodogram import PeriodogramFeatureExtractor
-from .lpc import LPCFeatureExtractor
 from .coherence import CoherenceFeatureExtractor
+from .lpc import LPCFeatureExtractor
+from .periodogram import PeriodogramFeatureExtractor
 from .plv import PLVFeatureExtractor
+from .time_domain import TimeDomainFeatureExtractor
+from .utils import create_trailing_frames
 
 
 class FeatureExtractor:
@@ -25,9 +27,9 @@ class FeatureExtractor:
     ):
         self.fs = fs
         self.win_sizes = win_sizes or [
+            int(0.25 * self.fs),
             int(0.5 * self.fs),
             int(1 * self.fs),
-            int(2 * self.fs),
         ]
         self.hop_len = hop_len or int(0.01 * self.fs)
         self.initial_offset = initial_offset or max(self.win_sizes)
@@ -114,20 +116,24 @@ class FeatureExtractor:
         mode: str,
         framed: Float[np.ndarray, "n_epochs n_frames n_channels n_samples"],
         t_framed: Float[np.ndarray, "n_frames"],
-    ):
+    ) -> list[xr.DataArray]:
+        features_xr_cont = []
+
         if mode == "time":
             time_ext = TimeDomainFeatureExtractor()
             feats = time_ext.get_feats(framed)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
 
-            features_xr = xr.DataArray(
-                feats,  # the numpy array of features
-                dims=["epoch", "frame", "feature_name"],
-                coords={
-                    "epoch": np.arange(feats.shape[0]),
-                    "frame": t_framed.reshape(-1),
-                    "feature_name": time_ext.feat_names(framed.shape[2]),
-                },
+            features_xr_cont.append(
+                xr.DataArray(
+                    feats,  # the numpy array of features
+                    dims=["epoch", "frame", "feature_name"],
+                    coords={
+                        "epoch": np.arange(feats.shape[0]),
+                        "frame": t_framed.reshape(-1),
+                        "feature_name": time_ext.feat_names(framed.shape[2]),
+                    },
+                )
             )
 
         elif mode == "LPC":
@@ -135,14 +141,16 @@ class FeatureExtractor:
             feats = extractor.get_feats(framed)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
 
-            features_xr = xr.DataArray(
-                feats,  # the numpy array of features
-                dims=["epoch", "frame", "feature_name"],
-                coords={
-                    "epoch": np.arange(feats.shape[0]),
-                    "frame": t_framed.reshape(-1),
-                    "feature_name": extractor.feat_names(framed.shape[2]),
-                },
+            features_xr_cont.append(
+                xr.DataArray(
+                    feats,  # the numpy array of features
+                    dims=["epoch", "frame", "feature_name"],
+                    coords={
+                        "epoch": np.arange(feats.shape[0]),
+                        "frame": t_framed.reshape(-1),
+                        "feature_name": extractor.feat_names(framed.shape[2]),
+                    },
+                )
             )
 
         elif mode == "cepstrum":
@@ -150,14 +158,16 @@ class FeatureExtractor:
             feats = cepstrum_ext.get_feats(framed)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
 
-            features_xr = xr.DataArray(
-                feats,  # the numpy array of features
-                dims=["epoch", "frame", "feature_name"],
-                coords={
-                    "epoch": np.arange(feats.shape[0]),
-                    "frame": t_framed.reshape(-1),
-                    "feature_name": cepstrum_ext.feat_names(framed.shape[2]),
-                },
+            features_xr_cont.append(
+                xr.DataArray(
+                    feats,  # the numpy array of features
+                    dims=["epoch", "frame", "feature_name"],
+                    coords={
+                        "epoch": np.arange(feats.shape[0]),
+                        "frame": t_framed.reshape(-1),
+                        "feature_name": cepstrum_ext.feat_names(framed.shape[2]),
+                    },
+                )
             )
 
         elif mode == "periodogram":
@@ -165,14 +175,16 @@ class FeatureExtractor:
             feats = periodogram_ext.get_feats(framed, fs=self.fs)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
 
-            features_xr = xr.DataArray(
-                feats,  # the numpy array of features
-                dims=["epoch", "frame", "feature_name"],
-                coords={
-                    "epoch": np.arange(feats.shape[0]),
-                    "frame": t_framed.reshape(-1),
-                    "feature_name": periodogram_ext.feat_names(framed.shape[2]),
-                },
+            features_xr_cont.append(
+                xr.DataArray(
+                    feats,  # the numpy array of features
+                    dims=["epoch", "frame", "feature_name"],
+                    coords={
+                        "epoch": np.arange(feats.shape[0]),
+                        "frame": t_framed.reshape(-1),
+                        "feature_name": periodogram_ext.feat_names(framed.shape[2]),
+                    },
+                )
             )
 
         # Connectivity features
@@ -183,17 +195,19 @@ class FeatureExtractor:
                     framed[:, :, ch1, :], framed[:, :, ch2, :], fs=self.fs
                 )
 
-                features_xr = xr.DataArray(
-                    feats,
-                    dims=["epoch", "frame", "feature_name"],
-                    coords={
-                        "epoch": np.arange(feats.shape[0]),
-                        "frame": t_framed.reshape(-1),
-                        "feature_name": [
-                            f"{name}_ch{ch1}-{ch2}"
-                            for name in coherence_ext.feat_names()
-                        ],
-                    },
+                features_xr_cont.append(
+                    xr.DataArray(
+                        feats,
+                        dims=["epoch", "frame", "feature_name"],
+                        coords={
+                            "epoch": np.arange(feats.shape[0]),
+                            "frame": t_framed.reshape(-1),
+                            "feature_name": [
+                                f"{name}_ch{ch1}-{ch2}"
+                                for name in coherence_ext.feat_names()
+                            ],
+                        },
+                    )
                 )
 
         elif mode == "plv":
@@ -203,22 +217,24 @@ class FeatureExtractor:
                     framed[:, :, ch1, :], framed[:, :, ch2, :], fs=self.fs
                 )
 
-                features_xr = xr.DataArray(
-                    feats,  # the numpy array of features
-                    dims=["epoch", "frame", "feature_name"],
-                    coords={
-                        "epoch": np.arange(feats.shape[0]),
-                        "frame": t_framed.reshape(-1),
-                        "feature_name": [
-                            f"PLV{freqs}_ch{ch1}-{ch2}"
-                            for freqs in coherence_ext.feat_names()
-                        ],
-                    },
+                features_xr_cont.append(
+                    xr.DataArray(
+                        feats,  # the numpy array of features
+                        dims=["epoch", "frame", "feature_name"],
+                        coords={
+                            "epoch": np.arange(feats.shape[0]),
+                            "frame": t_framed.reshape(-1),
+                            "feature_name": [
+                                f"PLV{freqs}_ch{ch1}-{ch2}"
+                                for freqs in coherence_ext.feat_names()
+                            ],
+                        },
+                    )
                 )
         else:
             raise ValueError(f"Unknown feat class modality '{mode}'")
 
-        return features_xr
+        return features_xr_cont
 
     def get_feats_for_win_size(self, data, win_size):
         framed = create_trailing_frames(
@@ -242,5 +258,8 @@ class FeatureExtractor:
                 for mode in self.modes
             ]
             features_dicts = compute(*delayed_features)
+
+        # Flatten lis of lists:
+        features_dicts = [el for sublist in features_dicts for el in sublist]
 
         return xr.concat(features_dicts, dim="feature_name")

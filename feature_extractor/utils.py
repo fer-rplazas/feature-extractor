@@ -2,6 +2,29 @@ import numpy as np
 from jaxtyping import Float
 from numba import njit, prange
 
+import warnings
+
+def reshape_feats(feats):
+    reshaped_data = feats.stack(features=["feature_name", "win_size"])
+
+    # Rename features to include window size
+    # Drop relevant dimensions:
+    # Ignore FutureWarning
+    with warnings.catch_warnings():
+        warnings.simplefilter(action="ignore", category=FutureWarning)
+        features = reshaped_data.features.values
+        reshaped_data.drop_vars({"feature_name", "win_size", "features"})
+
+        reshaped_data = reshaped_data.assign_coords(
+            {
+                "features": [
+                    f"{feat_name}_{win_size}" for feat_name, win_size in features
+                ]
+            }
+        )
+        reshaped_data = reshaped_data.stack(observation=["epoch", "frame"]).transpose()
+
+    return reshaped_data
 
 @njit(parallel=True)
 def create_trailing_frames(
