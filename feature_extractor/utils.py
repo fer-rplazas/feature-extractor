@@ -4,6 +4,45 @@ from numba import njit, prange
 
 import warnings
 
+@njit()
+def causal_bl_correct(
+    X: Float[np.ndarray, "n_epochs n_frames n_win_len n_features"],
+    winsor_limit: float = 0.02,
+    len_scale: int = 100,
+):
+    # Iterate over each feature
+    for feat_idx in prange(X.shape[-1]):
+        for epoch in prange(X.shape[0]):
+            for window_length in prange(X.shape[2]):
+                # Extract the data for current feature, epoch, and window length
+                data = X[epoch, :, window_length, feat_idx]
+
+                # Step 1: Winsorize the feature data
+                winsorized_data = np.clip(
+                    data,
+                    np.quantile(data, winsor_limit),
+                    np.quantile(data, 1 - winsor_limit),
+                )
+
+                # Step 2: Robustly scale each nth value using previous n-k values
+                scaled_data = np.copy(winsorized_data)
+                for n in range(10, len(scaled_data)):
+                    id_low = max(0, n - len_scale)
+                    scale_window = winsorized_data[id_low:n]
+                    median = np.median(scale_window)
+                    q_low = np.quantile(scale_window, 0.2)
+                    q_high = np.quantile(scale_window, 0.8)
+                    scale_iqr = q_high - q_low
+                    # scale_iqr = iqr(scale_window)
+
+                    if scale_iqr > 0:
+                        scaled_data[n] = (scaled_data[n] - median) / (scale_iqr + 1e-8)
+
+                # Update the features array
+                X[epoch, :, window_length, feat_idx] = scaled_data
+
+    return X
+
 def reshape_feats(feats):
     reshaped_data = feats.stack(features=["feature_name", "win_size"])
 

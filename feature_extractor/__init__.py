@@ -1,9 +1,9 @@
-import warnings
-
 import numpy as np
 import xarray as xr
 from dask import compute, delayed
 from jaxtyping import Float
+from scipy.stats import iqr
+from scipy.stats.mstats import winsorize
 
 from .cepstral import CepstralFeatureExtractor
 from .coherence import CoherenceFeatureExtractor
@@ -11,7 +11,8 @@ from .lpc import LPCFeatureExtractor
 from .periodogram import PeriodogramFeatureExtractor
 from .plv import PLVFeatureExtractor
 from .time_domain import TimeDomainFeatureExtractor
-from .utils import create_trailing_frames
+from .utils import create_trailing_frames, causal_bl_correct
+
 
 
 class FeatureExtractor:
@@ -64,6 +65,49 @@ class FeatureExtractor:
         )
 
         return self
+
+    def causal_bl_correct(self, winsor_limit=0.05, len_scale=100):
+        if not hasattr(self, "features"):
+            raise ValueError(
+                "Features have not been calculated yet -- call `calculate_features` first"
+            )
+
+        self.features.values = causal_bl_correct(
+            self.features.values, winsor_limit, len_scale
+        )
+
+        # # Iterate over each feature
+        # for feat_name in features.feature_name.values:
+        #     for epoch in features.epoch.values:
+        #         for window_length in features.win_size.values:
+        #             # Extract the data for current feature, epoch, and window length
+        #             data = features.sel(
+        #                 epoch=epoch, feature_name=feat_name, win_size=window_length
+        #             ).values
+
+        #             # Step 1: Winsorize the feature data
+        #             winsorized_data = winsorize(
+        #                 data, limits=(winsor_limit, winsor_limit)
+        #             )
+
+        #             # Step 2: Robustly scale each nth value using previous n-k values
+        #             scaled_data = np.copy(winsorized_data)
+        #             for n in range(len_scale, len(scaled_data)):
+        #                 scale_window = winsorized_data[n - len_scale : n]
+        #                 median = np.median(scale_window)
+        #                 scale_iqr = iqr(scale_window)
+
+        #                 if scale_iqr > 0:
+        #                     scaled_data[n] = (scaled_data[n] - median) / scale_iqr
+
+        #             # Update the features array
+        #             features.loc[
+        #                 dict(
+        #                     epoch=epoch, feature_name=feat_name, win_size=window_length
+        #                 )
+        #             ] = scaled_data
+
+        # self.features = features
 
     def label_from_frame_time(self, t_cutoff: float, n_epochs: int):
         if self.features is None:
@@ -160,7 +204,7 @@ class FeatureExtractor:
 
             features_xr_cont.append(
                 xr.DataArray(
-                    feats,  # the numpy array of features
+                    feats,
                     dims=["epoch", "frame", "feature_name"],
                     coords={
                         "epoch": np.arange(feats.shape[0]),
@@ -177,7 +221,7 @@ class FeatureExtractor:
 
             features_xr_cont.append(
                 xr.DataArray(
-                    feats,  # the numpy array of features
+                    feats,
                     dims=["epoch", "frame", "feature_name"],
                     coords={
                         "epoch": np.arange(feats.shape[0]),
