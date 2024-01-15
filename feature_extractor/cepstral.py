@@ -79,7 +79,9 @@ class CepstralFeatureExtractor:
 
     def get_feats(self, X):
         # Compute cepstrum for the entire array
-        cepstrum = compute_cepstrum(X)
+        n_samples = X.shape[-1]
+        window = np.hanning(n_samples)
+        cepstrum = compute_cepstrum(X * window)
 
         # Compute band edges
         band_edges = self._compute_band_edges(cepstrum.shape[-1])
