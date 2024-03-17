@@ -14,7 +14,6 @@ from .time_domain import TimeDomainFeatureExtractor
 from .utils import create_trailing_frames, causal_bl_correct
 
 
-
 class FeatureExtractor:
     def __init__(
         self,
@@ -25,10 +24,14 @@ class FeatureExtractor:
         coh_channels: list[tuple[int, int]] | None = None,
         n_jobs: int | None = None,
         fs: float = 2048.0,
+        periodogram_kwargs: dict | None = None,
+        time_kwargs: dict | None = None,
+        cepstrum_kwargs: dict | None = None,
+        coherence_kwargs: dict | None = None,
     ):
         self.fs = fs
         self.win_sizes = win_sizes or [
-            int(0.25 * self.fs),
+            # int(0.25 * self.fs),
             int(0.5 * self.fs),
             int(1 * self.fs),
         ]
@@ -38,6 +41,11 @@ class FeatureExtractor:
         self.coh_channels = coh_channels or [(0, 1)]
         self.n_jobs = n_jobs or 1
         self.features = None
+
+        self.periodogram_kwargs = periodogram_kwargs or {}
+        self.time_kwargs = time_kwargs or {}
+        self.cepstrum_kwargs = cepstrum_kwargs or {}
+        self.coherence_kwargs = coherence_kwargs or {}
 
     def calculate_features(
         self, data: Float[np.ndarray, "n_epochs n_channels n_samples"]
@@ -134,7 +142,7 @@ class FeatureExtractor:
         features_xr_cont = []
 
         if mode == "time":
-            time_ext = TimeDomainFeatureExtractor()
+            time_ext = TimeDomainFeatureExtractor(**self.time_kwargs)
             feats = time_ext.get_feats(framed)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
 
@@ -168,7 +176,7 @@ class FeatureExtractor:
             )
 
         elif mode == "cepstrum":
-            cepstrum_ext = CepstralFeatureExtractor()
+            cepstrum_ext = CepstralFeatureExtractor(**self.cepstrum_kwargs)
             feats = cepstrum_ext.get_feats(framed)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
 
@@ -185,7 +193,7 @@ class FeatureExtractor:
             )
 
         elif mode == "periodogram":
-            periodogram_ext = PeriodogramFeatureExtractor()
+            periodogram_ext = PeriodogramFeatureExtractor(**self.periodogram_kwargs)
             feats = periodogram_ext.get_feats(framed, fs=self.fs)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
 
@@ -204,7 +212,7 @@ class FeatureExtractor:
         # Connectivity features
         elif mode == "coh":
             for ch1, ch2 in self.coh_channels:
-                coherence_ext = CoherenceFeatureExtractor()
+                coherence_ext = CoherenceFeatureExtractor(**self.coherence_kwargs)
                 feats = coherence_ext.get_feats(
                     framed[:, :, ch1, :], framed[:, :, ch2, :], fs=self.fs
                 )
