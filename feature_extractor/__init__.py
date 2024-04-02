@@ -10,6 +10,7 @@ from .coherence import CoherenceFeatureExtractor
 from .lpc import LPCFeatureExtractor
 from .periodogram import PeriodogramFeatureExtractor
 from .plv import PLVFeatureExtractor
+from .psi import PSIFeatureExtractor
 from .time_domain import TimeDomainFeatureExtractor
 from .utils import create_trailing_frames, causal_bl_correct
 
@@ -28,6 +29,8 @@ class FeatureExtractor:
         time_kwargs: dict | None = None,
         cepstrum_kwargs: dict | None = None,
         coherence_kwargs: dict | None = None,
+        plv_kwargs: dict | None = None,
+        psi_kwargs: dict | None = None,
     ):
         self.fs = fs
         self.win_sizes = win_sizes or [
@@ -46,6 +49,8 @@ class FeatureExtractor:
         self.time_kwargs = time_kwargs or {}
         self.cepstrum_kwargs = cepstrum_kwargs or {}
         self.coherence_kwargs = coherence_kwargs or {}
+        self.plv_kwargs = plv_kwargs or {}
+        self.psi_kwargs = psi_kwargs or {}
 
     def calculate_features(
         self, data: Float[np.ndarray, "n_epochs n_channels n_samples"]
@@ -232,9 +237,31 @@ class FeatureExtractor:
                     )
                 )
 
+        elif mode == "psi":
+            for ch1, ch2 in self.coh_channels:
+                coherence_ext = PSIFeatureExtractor(**self.psi_kwargs)
+                feats = coherence_ext.get_feats(
+                    framed[:, :, ch1, :], framed[:, :, ch2, :], fs=self.fs
+                )
+
+                features_xr_cont.append(
+                    xr.DataArray(
+                        feats,  # the numpy array of features
+                        dims=["epoch", "frame", "feature_name"],
+                        coords={
+                            "epoch": np.arange(feats.shape[0]),
+                            "frame": t_framed.reshape(-1),
+                            "feature_name": [
+                                f"PSI{freqs}_ch{ch1}-{ch2}"
+                                for freqs in coherence_ext.feat_names()
+                            ],
+                        },
+                    )
+                )
+
         elif mode == "plv":
             for ch1, ch2 in self.coh_channels:
-                coherence_ext = PLVFeatureExtractor()
+                coherence_ext = PLVFeatureExtractor(**self.plv_kwargs)
                 feats = coherence_ext.get_feats(
                     framed[:, :, ch1, :], framed[:, :, ch2, :], fs=self.fs
                 )
