@@ -2,8 +2,6 @@ import numpy as np
 import xarray as xr
 from dask import compute, delayed
 from jaxtyping import Float
-from scipy.stats import iqr
-from scipy.stats.mstats import winsorize
 
 from .cepstral import CepstralFeatureExtractor
 from .coherence import CoherenceFeatureExtractor
@@ -40,7 +38,7 @@ class FeatureExtractor:
         ]
         self.hop_len = hop_len or int(0.01 * self.fs)
         self.initial_offset = initial_offset or max(self.win_sizes)
-        self.modes = modes or ["time", "periodogram", "cepstrum"]
+        self.modes = modes or ["time", "periodogram", "periodogram_norm", "cepstrum"]
         self.coh_channels = coh_channels or [(0, 1)]
         self.n_jobs = n_jobs or 1
         self.features = None
@@ -199,6 +197,25 @@ class FeatureExtractor:
 
         elif mode == "periodogram":
             periodogram_ext = PeriodogramFeatureExtractor(**self.periodogram_kwargs)
+            feats = periodogram_ext.get_feats(framed, fs=self.fs)
+            feats = feats.reshape(feats.shape[:-2] + (-1,))
+
+            features_xr_cont.append(
+                xr.DataArray(
+                    feats,
+                    dims=["epoch", "frame", "feature_name"],
+                    coords={
+                        "epoch": np.arange(feats.shape[0]),
+                        "frame": t_framed.reshape(-1),
+                        "feature_name": periodogram_ext.feat_names(framed.shape[2]),
+                    },
+                )
+            )
+
+        elif mode == "periodogram_norm":
+            periodogram_ext = PeriodogramFeatureExtractor(
+                **self.periodogram_kwargs, normalize=True
+            )
             feats = periodogram_ext.get_feats(framed, fs=self.fs)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
 
