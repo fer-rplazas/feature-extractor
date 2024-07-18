@@ -52,7 +52,7 @@ class PSIFeatureExtractor:
             phase2 = np.angle(analytic_signal2)
 
             # Compute the phase synchrony index (PSI)
-            psi = np.abs(np.mean(np.exp(np.complex(0, 1) * (phase1 - phase2)), axis=-1))
+            psi = np.abs(np.mean(np.exp(complex(0, 1) * (phase1 - phase2)), axis=-1))
 
             # Store the PSI for each frequency band
             feats[:, :, band_idx] = psi
