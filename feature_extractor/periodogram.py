@@ -6,13 +6,20 @@ from scipy.signal import periodogram
 from .utils import array_idx
 
 
-@njit(parallel=True)
+@njit(parallel=False)
 def calculate_features(Pxx, f_lows, f_highs, w_120, normalize=False):
     n_bands = len(f_lows)
-    feats = np.zeros((Pxx.shape[0], Pxx.shape[1], Pxx.shape[2], n_bands))
+    feats = np.zeros((Pxx.shape[0], Pxx.shape[1], Pxx.shape[2], n_bands * 2))
     for kk in prange(n_bands):
         f_low, f_high = f_lows[kk], f_highs[kk]
-        feats[..., kk] = np.sum(Pxx[..., f_low:f_high], axis=-1) / (f_high - f_low)
+        mean_val = np.sum(Pxx[..., f_low:f_high], axis=-1) / (f_high - f_low)
+        feats[..., kk] = mean_val
+
+        sum_sq_diff = np.sum(
+            (Pxx[..., f_low:f_high] - mean_val[..., np.newaxis]) ** 2, axis=-1
+        )
+        feats[..., n_bands + kk] = np.sqrt(sum_sq_diff / (f_high - f_low))
+
         if normalize:
             total_power = np.sum(Pxx[..., :w_120], axis=-1) / w_120
             feats[..., kk] = feats[..., kk] / (total_power + 1e-7)
@@ -48,6 +55,10 @@ class PeriodogramFeatureExtractor:
 
         return [
             f"{prefix}{f_low}-{f_high}_ch{ch}"
+            for ch in range(n_channels)
+            for f_low, f_high in self.freq_bands
+        ] + [
+            f"{prefix}Std_{f_low}-{f_high}_ch{ch}"
             for ch in range(n_channels)
             for f_low, f_high in self.freq_bands
         ]
