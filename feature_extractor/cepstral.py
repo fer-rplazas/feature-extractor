@@ -53,7 +53,7 @@ def fill_feats(cepstrum, band_edges, feats):
 class CepstralFeatureExtractor:
     def __init__(
         self,
-        n_bands: int = 8,
+        n_bands: int = 12,
     ):
         self.n_bands = n_bands
         self.n_coef = n_bands * 2
