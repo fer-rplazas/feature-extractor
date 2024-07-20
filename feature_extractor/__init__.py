@@ -77,7 +77,7 @@ class FeatureExtractor:
 
         return self
 
-    def causal_bl_correct(self, winsor_limit=0.02, len_time=5):
+    def causal_bl_correct(self, winsor_limit: float = 0.02, len_time: float = 5.0):
         if not hasattr(self, "features"):
             raise ValueError(
                 "Features have not been calculated yet -- call `calculate_features` first"
@@ -302,7 +302,9 @@ class FeatureExtractor:
 
         return features_xr_cont
 
-    def get_feats_for_win_size(self, data, win_size):
+    def get_feats_for_win_size(
+        self, data: Float[np.ndarray, "n_epochs n_channels n_samples"], win_size: int
+    ):
         framed = create_trailing_frames(
             data, win_size, self.hop_len, self.initial_offset
         )
