@@ -6,6 +6,7 @@ from jaxtyping import Float
 from .cepstral import CepstralFeatureExtractor
 from .coherence import CoherenceFeatureExtractor
 from .lpc import LPCFeatureExtractor
+from .ar import ARFeatureExtractor
 from .periodogram import PeriodogramFeatureExtractor
 from .plv import PLVFeatureExtractor
 from .psi import PSIFeatureExtractor
@@ -26,6 +27,7 @@ class FeatureExtractor:
         periodogram_kwargs: dict | None = None,
         time_kwargs: dict | None = None,
         cepstrum_kwargs: dict | None = None,
+        ar_kwargs: dict | None = None,
         coherence_kwargs: dict | None = None,
         plv_kwargs: dict | None = None,
         psi_kwargs: dict | None = None,
@@ -38,7 +40,13 @@ class FeatureExtractor:
         ]
         self.hop_len = hop_len or int(0.01 * self.fs)
         self.initial_offset = initial_offset or max(self.win_sizes)
-        self.modes = modes or ["time", "periodogram", "periodogram_norm", "cepstrum"]
+        self.modes = modes or [
+            "time",
+            "periodogram",
+            "periodogram_norm",
+            "cepstrum",
+            "ar",
+        ]
         self.coh_channels = coh_channels or [(0, 1)]
         self.n_jobs = n_jobs or 1
         self.features = None
@@ -47,6 +55,7 @@ class FeatureExtractor:
         self.time_kwargs = time_kwargs or {}
         self.cepstrum_kwargs = cepstrum_kwargs or {}
         self.coherence_kwargs = coherence_kwargs or {}
+        self.ar_kwargs = ar_kwargs or {}
         self.plv_kwargs = plv_kwargs or {}
         self.psi_kwargs = psi_kwargs or {}
 
@@ -174,6 +183,23 @@ class FeatureExtractor:
                         "epoch": np.arange(feats.shape[0]),
                         "frame": t_framed.reshape(-1),
                         "feature_name": extractor.feat_names(framed.shape[2]),
+                    },
+                )
+            )
+
+        elif mode == "ar":
+            ar_ext = ARFeatureExtractor(**self.ar_kwargs)
+            feats = ar_ext.get_feats(framed)
+            feats = feats.reshape(feats.shape[:-2] + (-1,))
+
+            features_xr_cont.append(
+                xr.DataArray(
+                    feats,  # the numpy array of features
+                    dims=["epoch", "frame", "feature_name"],
+                    coords={
+                        "epoch": np.arange(feats.shape[0]),
+                        "frame": t_framed.reshape(-1),
+                        "feature_name": ar_ext.feat_names(framed.shape[2]),
                     },
                 )
             )
