@@ -72,6 +72,9 @@ class PeriodogramFeatureExtractor:
 
         w_ref, Pxx = periodogram(X * window, fs=fs, axis=-1)
 
+        # Log-scale the periodogram
+        Pxx = np.log1p(Pxx + 1e-7)
+
         idx = [array_idx(w_ref, el) for el in self.freq_bands]
         w_120, _ = array_idx(w_ref, (120, 140))
 
