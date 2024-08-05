@@ -4,6 +4,7 @@ from numba import njit, prange
 
 import warnings
 
+
 @njit()
 def causal_bl_correct(
     X: Float[np.ndarray, "n_epochs n_frames n_win_len n_features"],
@@ -43,6 +44,7 @@ def causal_bl_correct(
 
     return X
 
+
 def reshape_feats(feats):
     reshaped_data = feats.stack(features=["feature_name", "win_size"])
 
@@ -64,6 +66,7 @@ def reshape_feats(feats):
         reshaped_data = reshaped_data.stack(observation=["epoch", "frame"]).transpose()
 
     return reshaped_data
+
 
 @njit(parallel=True)
 def create_trailing_frames(

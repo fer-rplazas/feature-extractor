@@ -4,6 +4,7 @@ from numba import njit, prange
 from scipy.signal import periodogram
 
 from .utils import array_idx
+from .assets import default_canonical_freq_bands
 
 
 @njit(parallel=False)
@@ -32,17 +33,7 @@ class PeriodogramFeatureExtractor:
         freq_bands: list[tuple[float, float]] | None = None,
         normalize: bool = False,
     ):
-        self.freq_bands = freq_bands or [
-            (4, 8),
-            (9, 12),
-            (13, 20),
-            (20, 30),
-            (30, 60),
-            (60, 80),
-            (80, 120),
-            (120, 200),
-            (200, 400),
-        ]
+        self.freq_bands = freq_bands or default_canonical_freq_bands
 
         self.normalize = normalize
 

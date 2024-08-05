@@ -36,6 +36,7 @@ def hjorth(
 
     return np.stack((activity, mobility, complexity), axis=-1)
 
+
 class TimeDomainFeatureExtractor:
     def __init__(self):
         pass
