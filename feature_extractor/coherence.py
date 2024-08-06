@@ -44,7 +44,7 @@ class CoherenceFeatureExtractor:
         X2_auto_spectrum = X2_fft * np.conj(X2_fft)
 
         coherence = np.abs(
-            cross_spectral_density**2 / (X1_auto_spectrum * X2_auto_spectrum) + 1e-7
+            cross_spectral_density**2 / ((X1_auto_spectrum * X2_auto_spectrum) + 1e-7)
         )
         icoherence = np.abs(
             np.imag(cross_spectral_density)
