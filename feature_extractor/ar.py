@@ -18,7 +18,7 @@ def process_channel(channel_data, ar_order):
 
 
 class ARFeatureExtractor:
-    def __init__(self, order: int = 10):
+    def __init__(self, order: int = 12):
         self.order = order
 
     def feat_names(self, n_channels: int):

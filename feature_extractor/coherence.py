@@ -1,12 +1,11 @@
 import numpy as np
 from jaxtyping import Float
-from numba import njit
 
 from .assets import default_canonical_freq_bands
 
 
 class CoherenceFeatureExtractor:
-    def __init__(self, freq_bands: list[tuple[float, float]] = None):
+    def __init__(self, freq_bands: list[tuple[float, float]] | None = None):
 
         self.freq_bands = freq_bands or default_canonical_freq_bands
 

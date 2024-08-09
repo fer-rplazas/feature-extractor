@@ -45,14 +45,15 @@ class TimeDomainFeatureExtractor:
         return [
             f"{feat_name}_ch{ch}"
             for ch in range(n_channels)
-            for feat_name in ("mean", "std", "kurt", "act", "mob", "complex")
+            for feat_name in ("mean", "std", "skew", "kurt", "act", "mob", "complex")
         ]
 
     def get_feats(self, X: Float[np.ndarray, "n_epochs n_frames n_chan n_samples"]):
         mean = np.mean(X, keepdims=True, axis=-1)
         std = np.std(X, keepdims=True, axis=-1)
+        skew = stats.skew(X, axis=-1)[..., np.newaxis]
         kurtosis = stats.kurtosis(X, axis=-1)[..., np.newaxis]
 
         hjorth_feats = hjorth(X)
 
-        return np.concatenate([mean, std, kurtosis, hjorth_feats], axis=-1)
+        return np.concatenate([mean, std, skew, kurtosis, hjorth_feats], axis=-1)
