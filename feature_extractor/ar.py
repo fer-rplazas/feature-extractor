@@ -5,9 +5,17 @@ from joblib import Parallel, delayed
 import numpy as np
 from statsmodels.regression.linear_model import yule_walker
 
+import warnings
+
 
 def compute_ar_params(signal, order):
-    rho, sigma = yule_walker(signal, order=order)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message=".*Matrix is singular.*", category=UserWarning
+        )
+        rho, sigma = yule_walker(signal, order=order)
+
     return rho
 
 
@@ -37,7 +45,7 @@ class ARFeatureExtractor:
 
         # Use joblib to process each channel in parallel
         ar_params = Parallel(n_jobs=-1)(
-            delayed(process_channel)(X[i], self.order) for i in range(X.shape[0])
+            delayed(process_channel)(X[i], self.order) for i in range(n_epochs)
         )
 
         ar_params = np.stack(ar_params, axis=0)

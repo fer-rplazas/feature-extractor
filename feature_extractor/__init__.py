@@ -17,13 +17,13 @@ from .utils import create_trailing_frames, causal_bl_correct
 class FeatureExtractor:
     def __init__(
         self,
+        fs: float,
         win_sizes: list[int] | None = None,
         hop_len: int | None = None,
         initial_offset: int | None = None,
         modes: list[str] | None = None,
         coh_channels: list[tuple[int, int]] | None = None,
         n_jobs: int | None = None,
-        fs: float = 2048.0,
         periodogram_kwargs: dict | None = None,
         time_kwargs: dict | None = None,
         cepstrum_kwargs: dict | None = None,

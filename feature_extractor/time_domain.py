@@ -25,9 +25,9 @@ def hjorth(
     second_deriv = np.diff(first_deriv, axis=-1)
 
     # Calculate variances
-    var_zero = np.mean(input_signal**2, axis=-1)
-    var_d1 = np.mean(first_deriv**2, axis=-1)
-    var_d2 = np.mean(second_deriv**2, axis=-1)
+    var_zero = np.var(input_signal, axis=-1)
+    var_d1 = np.var(first_deriv, axis=-1)
+    var_d2 = np.var(second_deriv, axis=-1)
 
     # Calculate Hjorth parameters
     activity = var_zero
@@ -45,15 +45,15 @@ class TimeDomainFeatureExtractor:
         return [
             f"{feat_name}_ch{ch}"
             for ch in range(n_channels)
-            for feat_name in ("mean", "std", "skew", "kurt", "act", "mob", "complex")
+            for feat_name in ("mean", "energy", "skew", "kurt", "act", "mob", "complex")
         ]
 
     def get_feats(self, X: Float[np.ndarray, "n_epochs n_frames n_chan n_samples"]):
         mean = np.mean(X, keepdims=True, axis=-1)
-        std = np.std(X, keepdims=True, axis=-1)
+        energy = np.mean(X**2, keepdims=True, axis=-1)
         skew = stats.skew(X, axis=-1)[..., np.newaxis]
         kurtosis = stats.kurtosis(X, axis=-1)[..., np.newaxis]
 
         hjorth_feats = hjorth(X)
 
-        return np.concatenate([mean, std, skew, kurtosis, hjorth_feats], axis=-1)
+        return np.concatenate([mean, energy, skew, kurtosis, hjorth_feats], axis=-1)
