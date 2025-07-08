@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feature-extractor"
+version = "0.1.0"
+description = "Extracts time-resolved features for neural time-series analyses"
+authors = [
+  { name = "Fernando Rodriguez", email = "ferrodplazas@gmail.com" }
+]
+readme = "README.md"
+requires-python = ">=3.11"
