@@ -2,10 +2,9 @@ import numpy as np
 from jaxtyping import Float
 from scipy import stats
 
-
 def hjorth(
     input_signal: Float[np.ndarray, "n_epochs n_frames n_channels n_samples"],
-    eps: float = 1e-7,
+    eps: float = np.finfo(float).eps,
 ) -> Float[np.ndarray, "n_epochs n_frames n_channels 3"]:
     """
     Compute Hjorth activity, mobility and complexity of a time series from multichannel input
@@ -35,7 +34,6 @@ def hjorth(
     complexity = np.sqrt(var_d2 / (var_d1 + eps)) / (mobility + eps)
 
     return np.stack((activity, mobility, complexity), axis=-1)
-
 
 class TimeDomainFeatureExtractor:
     def __init__(self):

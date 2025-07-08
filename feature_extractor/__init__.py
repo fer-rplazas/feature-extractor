@@ -13,7 +13,6 @@ from .psi import PSIFeatureExtractor
 from .time_domain import TimeDomainFeatureExtractor
 from .utils import create_trailing_frames, causal_bl_correct
 
-# Test
 
 class FeatureExtractor:
     def __init__(
@@ -79,10 +78,13 @@ class FeatureExtractor:
 
         # Concatenate, assign coordinates, and transpose as before
         self.features = xr.concat(feat_cont, dim="win_size")
-        self.features = self.features.assign_coords(win_size=self.win_sizes)
+        self.features = self.features.assign_coords(
+            win_size=np.array(self.win_sizes) / self.fs
+        )
         self.features = self.features.transpose(
             "epoch", "frame", "win_size", "feature_name"
         )
+        self.features.attrs["fs"] = self.fs
 
         return self
 

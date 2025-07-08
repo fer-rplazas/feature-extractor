@@ -4,7 +4,6 @@ from numba import njit, prange
 
 import warnings
 
-
 @njit()
 def causal_bl_correct(
     X: Float[np.ndarray, "n_epochs n_frames n_win_len n_features"],

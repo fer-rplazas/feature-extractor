@@ -1,17 +1,17 @@
 import numpy as np
 from jaxtyping import Float
-from numba import njit, prange
+from numba import njit
 from scipy.signal import periodogram
 
 from .utils import array_idx
 from .assets import default_canonical_freq_bands
 
 
-@njit(parallel=True)
+@njit(parallel=False)
 def calculate_features(Pxx, f_lows, f_highs, w_120, normalize=False):
     n_bands = len(f_lows)
-    feats = np.zeros((Pxx.shape[0], Pxx.shape[1], Pxx.shape[2], n_bands * 2))
-    for kk in prange(n_bands):
+    feats = np.zeros((Pxx.shape[0], Pxx.shape[1], Pxx.shape[2], n_bands * 2)) * np.nan
+    for kk in range(n_bands):
         f_low, f_high = f_lows[kk], f_highs[kk]
         mean_val = np.sum(Pxx[..., f_low:f_high], axis=-1) / (f_high - f_low)
         feats[..., kk] = mean_val
@@ -24,6 +24,11 @@ def calculate_features(Pxx, f_lows, f_highs, w_120, normalize=False):
         if normalize:
             total_power = np.sum(Pxx[..., :w_120], axis=-1) / w_120
             feats[..., kk] = feats[..., kk] / (total_power + 1e-7)
+
+    if np.isnan(feats).any():
+        raise ValueError(
+            "NaN values found in features during periodogram-based feature extraction. Check frequency band indices."
+        )
     return feats
 
 
@@ -61,10 +66,10 @@ class PeriodogramFeatureExtractor:
         n_samples = X.shape[-1]
         window = np.hanning(n_samples)
 
-        w_ref, Pxx = periodogram(X * window, fs=fs, scaling='spectrum', axis=-1)
+        w_ref, Pxx = periodogram(X * window, fs=fs, scaling="spectrum", axis=-1)
 
         # Log-scale the periodogram
-        Pxx = np.log1p(Pxx + 1e-7)
+        Pxx = np.log1p(Pxx + np.finfo(float).eps)
 
         idx = [array_idx(w_ref, el) for el in self.freq_bands]
         w_120, _ = array_idx(w_ref, (120, 140))
