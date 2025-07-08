@@ -13,6 +13,7 @@ from .psi import PSIFeatureExtractor
 from .time_domain import TimeDomainFeatureExtractor
 from .utils import create_trailing_frames, causal_bl_correct
 
+# Test
 
 class FeatureExtractor:
     def __init__(
@@ -34,7 +35,6 @@ class FeatureExtractor:
     ):
         self.fs = fs
         self.win_sizes = win_sizes or [
-            # int(0.25 * self.fs),
             int(0.5 * self.fs),
             int(1 * self.fs),
         ]
@@ -45,11 +45,9 @@ class FeatureExtractor:
             "periodogram",
             "periodogram_norm",
             "cepstrum",
-            "ar",
         ]
         self.coh_channels = coh_channels or [(0, 1)]
         self.n_jobs = n_jobs or 1
-        self.features = None
 
         self.periodogram_kwargs = periodogram_kwargs or {}
         self.time_kwargs = time_kwargs or {}
@@ -58,6 +56,8 @@ class FeatureExtractor:
         self.ar_kwargs = ar_kwargs or {}
         self.plv_kwargs = plv_kwargs or {}
         self.psi_kwargs = psi_kwargs or {}
+
+        self.features = None
 
     def calculate_features(
         self, data: Float[np.ndarray, "n_epochs n_channels n_samples"]
@@ -257,7 +257,7 @@ class FeatureExtractor:
                 )
             )
 
-        # Connectivity features
+        # Connectivity-based features
         elif mode == "coh":
             for ch1, ch2 in self.coh_channels:
                 coherence_ext = CoherenceFeatureExtractor(**self.coherence_kwargs)

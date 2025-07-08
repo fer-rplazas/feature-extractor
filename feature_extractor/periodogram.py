@@ -7,7 +7,7 @@ from .utils import array_idx
 from .assets import default_canonical_freq_bands
 
 
-@njit(parallel=False)
+@njit(parallel=True)
 def calculate_features(Pxx, f_lows, f_highs, w_120, normalize=False):
     n_bands = len(f_lows)
     feats = np.zeros((Pxx.shape[0], Pxx.shape[1], Pxx.shape[2], n_bands * 2))
@@ -56,12 +56,12 @@ class PeriodogramFeatureExtractor:
     def get_feats(
         self,
         X: Float[np.ndarray, "n_epochs n_frames n_channels n_samples"],
-        fs: float = 2048.0,
+        fs: float,
     ) -> Float[np.ndarray, "n_epochs n_frames n_channels n_bands"]:
         n_samples = X.shape[-1]
         window = np.hanning(n_samples)
 
-        w_ref, Pxx = periodogram(X * window, fs=fs, axis=-1)
+        w_ref, Pxx = periodogram(X * window, fs=fs, scaling='spectrum', axis=-1)
 
         # Log-scale the periodogram
         Pxx = np.log1p(Pxx + 1e-7)
