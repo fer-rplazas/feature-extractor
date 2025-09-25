@@ -4,6 +4,7 @@ from numba import njit, prange
 
 import warnings
 
+
 @njit()
 def causal_bl_correct(
     X: Float[np.ndarray, "n_epochs n_frames n_win_len n_features"],
@@ -24,8 +25,26 @@ def causal_bl_correct(
                     np.quantile(data, 1 - winsor_limit),
                 )
 
-                # Step 2: Robustly scale each nth value using previous n-k values
+                # Step 2: Robustly scale the data
                 scaled_data = np.copy(winsorized_data)
+
+                # For the first 10 values, use statistics from the first 100 values (or as many as available)
+                non_causal_window_size = min(100, len(winsorized_data))
+                if non_causal_window_size > 0:
+                    non_causal_window = winsorized_data[:non_causal_window_size]
+                    nc_median = np.median(non_causal_window)
+                    nc_q_low = np.quantile(non_causal_window, 0.2)
+                    nc_q_high = np.quantile(non_causal_window, 0.8)
+                    nc_scale_iqr = nc_q_high - nc_q_low
+
+                    # Apply scaling to the first 10 values
+                    for n in range(min(10, len(scaled_data))):
+                        if nc_scale_iqr > 0:
+                            scaled_data[n] = (scaled_data[n] - nc_median) / (
+                                nc_scale_iqr + 1e-8
+                            )
+
+                # From index 10 onwards, use causal scaling (as before)
                 for n in range(10, len(scaled_data)):
                     id_low = max(0, n - len_scale)
                     scale_window = winsorized_data[id_low:n]
@@ -33,7 +52,6 @@ def causal_bl_correct(
                     q_low = np.quantile(scale_window, 0.2)
                     q_high = np.quantile(scale_window, 0.8)
                     scale_iqr = q_high - q_low
-                    # scale_iqr = iqr(scale_window)
 
                     if scale_iqr > 0:
                         scaled_data[n] = (scaled_data[n] - median) / (scale_iqr + 1e-8)
