@@ -37,7 +37,7 @@ class PeriodogramFeatureExtractor:
         self,
         freq_bands: list[tuple[float, float]] | None = None,
         normalize: bool = False,
-    ):
+    ) -> Self:
         self.freq_bands = freq_bands or default_canonical_freq_bands
 
         self.normalize = normalize
