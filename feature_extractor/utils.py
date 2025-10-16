@@ -1,65 +1,151 @@
+from functools import partial
+from typing import Any
+
+import jax
+import jax.numpy as jnp
+from jax import lax
+from jax.scipy.special import erfinv
 import numpy as np
 from jaxtyping import Float
-from numba import njit, prange
 
 import warnings
 
 
-@njit()
+def ensure_device_array(
+    value: Any,
+    *,
+    device: jax.Device | None = None,
+    dtype: jnp.dtype | None = None,
+) -> jax.Array:
+    if isinstance(value, jax.Array):
+        arr = value
+        if dtype is not None and arr.dtype != dtype:
+            arr = arr.astype(dtype)
+        if device is not None:
+            arr = jax.device_put(arr, device)
+        return arr
+
+    np_value = np.asarray(value)
+    if dtype is not None:
+        np_value = np_value.astype(dtype, copy=False)
+    return jax.device_put(np_value, device)
+
+
+def to_numpy(value: Any) -> np.ndarray:
+    if isinstance(value, jax.Array):
+        return np.asarray(jax.device_get(value))
+    return np.asarray(value)
+
+
+def _winsor_scale_from_limit(limit: float, dtype: jnp.dtype) -> jnp.ndarray:
+    limit = jnp.asarray(limit, dtype=dtype)
+    limit = jnp.clip(limit, 1e-6, 0.499999)
+    # Convert percentile to number of standard deviations assuming a Gaussian.
+    sqrt_two = jnp.sqrt(jnp.asarray(2.0, dtype=dtype))
+    return sqrt_two * erfinv(jnp.asarray(2.0 * (1.0 - limit) - 1.0, dtype=dtype))
+
+
+def _causal_winsor_normalize(
+    sequence: jnp.ndarray,
+    alpha_main: jnp.ndarray,
+    alpha_warmup: jnp.ndarray,
+    warmup_points: int,
+    winsor_scale: jnp.ndarray,
+    eps: float,
+) -> jnp.ndarray:
+    if sequence.ndim != 1:
+        raise ValueError("Expected 1D sequence for causal normalization.")
+
+    def body(
+        carry: tuple[jnp.ndarray, jnp.ndarray],
+        inputs: tuple[jnp.ndarray, jnp.ndarray],
+    ):
+        mean, var = carry
+        value, idx = inputs
+
+        std = jnp.sqrt(jnp.maximum(var, eps))
+        lower = mean - winsor_scale * std
+        upper = mean + winsor_scale * std
+        clipped = jnp.clip(value, lower, upper)
+
+        alpha = jnp.where(idx < warmup_points, alpha_warmup, alpha_main)
+        delta = clipped - mean
+        mean = mean + alpha * delta
+        var = (1.0 - alpha) * (var + alpha * delta**2)
+        std_new = jnp.sqrt(jnp.maximum(var, eps))
+        normalized = (clipped - mean) / (std_new + eps)
+
+        return (mean, var), normalized
+
+    init_mean = sequence[0]
+    init_var = jnp.zeros_like(init_mean)
+
+    _, normalized = lax.scan(
+        body,
+        (init_mean, init_var),
+        (sequence, jnp.arange(sequence.shape[0], dtype=jnp.int32)),
+    )
+    return normalized
+
+
 def causal_bl_correct(
     X: Float[np.ndarray, "n_epochs n_frames n_win_len n_features"],
     winsor_limit: float = 0.02,
     len_scale: int = 100,
-):
-    # Iterate over each feature
-    for feat_idx in prange(X.shape[-1]):
-        for epoch in prange(X.shape[0]):
-            for window_length in prange(X.shape[2]):
-                # Extract the data for current feature, epoch, and window length
-                data = X[epoch, :, window_length, feat_idx]
+    warmup_points: int = 10,
+    warmup_scale: int = 100,
+    eps: float = 1e-8,
+    device: jax.Device | None = None,
+) -> Float[np.ndarray, "n_epochs n_frames n_win_len n_features"]:
+    X_np = np.asarray(X)
+    if X_np.ndim != 4:
+        raise ValueError(
+            "Input must have shape (n_epochs, n_frames, n_win_len, n_features)."
+        )
 
-                # Step 1: Winsorize the feature data
-                winsorized_data = np.clip(
-                    data,
-                    np.quantile(data, winsor_limit),
-                    np.quantile(data, 1 - winsor_limit),
-                )
+    if not np.issubdtype(X_np.dtype, np.floating):
+        X_np = X_np.astype(np.float32)
 
-                # Step 2: Robustly scale the data
-                scaled_data = np.copy(winsorized_data)
+    if not 0.0 < winsor_limit < 0.5:
+        raise ValueError("winsor_limit must be between 0 and 0.5.")
 
-                # For the first 10 values, use statistics from the first 100 values (or as many as available)
-                non_causal_window_size = min(100, len(winsorized_data))
-                if non_causal_window_size > 0:
-                    non_causal_window = winsorized_data[:non_causal_window_size]
-                    nc_median = np.median(non_causal_window)
-                    nc_q_low = np.quantile(non_causal_window, 0.2)
-                    nc_q_high = np.quantile(non_causal_window, 0.8)
-                    nc_scale_iqr = nc_q_high - nc_q_low
+    len_scale = max(int(len_scale), 1)
+    warmup_scale = max(int(warmup_scale), 1)
+    warmup_points = max(int(warmup_points), 0)
 
-                    # Apply scaling to the first 10 values
-                    for n in range(min(10, len(scaled_data))):
-                        if nc_scale_iqr > 0:
-                            scaled_data[n] = (scaled_data[n] - nc_median) / (
-                                nc_scale_iqr + 1e-8
-                            )
+    device_dtype = jax.dtypes.canonicalize_dtype(X_np.dtype)
+    data = ensure_device_array(X_np, device=device, dtype=device_dtype)
 
-                # From index 10 onwards, use causal scaling (as before)
-                for n in range(10, len(scaled_data)):
-                    id_low = max(0, n - len_scale)
-                    scale_window = winsorized_data[id_low:n]
-                    median = np.median(scale_window)
-                    q_low = np.quantile(scale_window, 0.2)
-                    q_high = np.quantile(scale_window, 0.8)
-                    scale_iqr = q_high - q_low
+    alpha_main = jnp.asarray(1.0 / len_scale, dtype=device_dtype)
+    alpha_warmup = jnp.asarray(1.0 / warmup_scale, dtype=device_dtype)
+    winsor_scale = _winsor_scale_from_limit(winsor_limit, device_dtype)
 
-                    if scale_iqr > 0:
-                        scaled_data[n] = (scaled_data[n] - median) / (scale_iqr + 1e-8)
+    def process(series: jnp.ndarray) -> jnp.ndarray:
+        if series.shape[0] < 1:
+            raise ValueError("Each time series must contain at least one frame.")
+        return _causal_winsor_normalize(
+            series,
+            alpha_main=alpha_main,
+            alpha_warmup=alpha_warmup,
+            warmup_points=warmup_points,
+            winsor_scale=winsor_scale,
+            eps=eps,
+        )
 
-                # Update the features array
-                X[epoch, :, window_length, feat_idx] = scaled_data
+    vmap_features = jax.vmap(process, in_axes=1, out_axes=1)
+    vmap_window = jax.vmap(vmap_features, in_axes=1, out_axes=1)
+    normalize = jax.vmap(vmap_window, in_axes=0, out_axes=0)
 
-    return X
+    normalized = normalize(data)
+    result = to_numpy(normalized)
+
+    if not np.isfinite(result).all():
+        raise ValueError(
+            "NaN or Inf detected after causal baseline correction. "
+            "Check input data or adjust winsor/len_scale parameters."
+        )
+
+    return result
 
 
 def reshape_feats(feats):
@@ -85,13 +171,44 @@ def reshape_feats(feats):
     return reshaped_data
 
 
-@njit(parallel=True)
+@partial(
+    jax.jit,
+    static_argnames=("frame_length", "hop_length", "initial_offset"),
+)
+def _create_trailing_frames_jax(
+    time_series: jnp.ndarray,
+    frame_length: int,
+    hop_length: int,
+    initial_offset: int,
+) -> jnp.ndarray:
+    start_index = initial_offset - frame_length
+    num_frames = (time_series.shape[-1] - initial_offset) // hop_length + 1
+
+    hop = jnp.array(hop_length, dtype=jnp.int32)
+    start0 = jnp.array(start_index, dtype=jnp.int32)
+    starts = start0 + hop * jnp.arange(num_frames, dtype=jnp.int32)
+
+    def extract(idx: jnp.ndarray) -> jnp.ndarray:
+        return jax.lax.dynamic_slice_in_dim(
+            time_series,
+            idx,
+            frame_length,
+            axis=2,
+        )
+
+    frames = jax.vmap(extract)(starts)
+    return jnp.transpose(frames, (1, 0, 2, 3))
+
+
 def create_trailing_frames(
     time_series: Float[np.ndarray, "n_trials n_channels n_samples"],
     frame_length: int,
     hop_length: int,
     initial_offset: int | None = None,
-) -> Float[np.ndarray, "n_trials n_frames n_channels frame_length"]:
+    device: jax.Device | None = None,
+) -> jax.Array:
+
+    assert time_series.ndim == 3, "Time series should be a 3D array"
     n_trials, n_channels, n_samples = time_series.shape
 
     if initial_offset is None:
@@ -112,26 +229,14 @@ def create_trailing_frames(
         time_series.ndim == 3
     ), "Time series should be a 3D array of shape `n_trials x n_channels x n_samples`"
 
-    # Calculate the total number of frames
-    num_frames = (n_samples - initial_offset) // hop_length + 1
+    device_dtype = jax.dtypes.canonicalize_dtype(time_series.dtype)
+    ts_device = ensure_device_array(time_series, device=device, dtype=device_dtype)
 
-    # Initialize an empty array to hold the frames
-    frames = np.empty((n_trials, num_frames, n_channels, frame_length))
-
-    # Loop over the frames
-    for kk in prange(n_trials):
-        for jj in prange(num_frames):
-            # Calculate the start of the current frame
-            start = initial_offset + jj * hop_length
-            # Add the current frame to the frames array
-            frames[kk, jj] = time_series[kk, :, start - frame_length : start]
+    frames = _create_trailing_frames_jax(
+        ts_device,
+        frame_length=frame_length,
+        hop_length=hop_length,
+        initial_offset=initial_offset,
+    )
 
     return frames
-
-
-def array_idx(arr, vals):
-    idx = []
-    for val in vals:
-        idx.append(np.argmin(np.abs(arr - val)))
-
-    return tuple(idx)

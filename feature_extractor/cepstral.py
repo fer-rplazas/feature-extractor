@@ -1,97 +1,125 @@
+from __future__ import annotations
+
+import jax
+import jax.numpy as jnp
 import numpy as np
-from numba import njit, prange
+from jaxtyping import Array, Float
+
+from .utils import ensure_device_array
 
 
-def compute_cepstrum(signal):
-    """
-    Compute the real cepstrum of a 1D signal.
-
-    :param signal: Input signal (1D numpy array).
-    :param n_coeffs: Number of cepstral coefficients to return. If None, returns all coefficients.
-    :return: Cepstral coefficients (1D numpy array).
-    """
-    # Compute the Fourier Transform
-    spectrum = np.fft.fft(signal)
-
-    # Compute the log magnitude spectrum
-    log_magnitude = np.log(
-        np.abs(spectrum) + np.finfo(float).eps
-    )  # Add eps for numerical stability
-
-    # Compute the inverse Fourier Transform
-    cepstrum = np.fft.ifft(log_magnitude).real
-
-    # Return the number of requested coefficients
-    return cepstrum
+def _hanning_window(length: int, dtype: jnp.dtype) -> Array:
+    if length <= 0:
+        raise ValueError("Signal length must be positive.")
+    if length == 1:
+        return jnp.ones((1,), dtype=dtype)
+    indices = jnp.arange(length, dtype=dtype)
+    return 0.5 - 0.5 * jnp.cos(2.0 * jnp.pi * indices / (length - 1))
 
 
-@njit(parallel=True)
-def fill_feats(cepstrum, band_edges, feats):
-    n_epochs, n_frames, n_channels, _ = cepstrum.shape
-    n_bands = len(band_edges) - 1
+def _compute_band_edges(n_ceps: int, n_bands: int) -> np.ndarray:
+    n_half = int(n_ceps // 2)
+    edges = [1]
+    for idx in range(1, n_bands + 1):
+        edge = int(n_half ** (idx / n_bands))
+        edges.append(min(edge, n_half))
+    return np.asarray(edges, dtype=np.int32)
 
-    for i in prange(n_epochs):
-        for j in prange(n_frames):
-            for k in prange(n_channels):
-                for b in prange(n_bands):
-                    low_idx = band_edges[b]
-                    high_idx = band_edges[b + 1]
 
-                    # Ensure indices are valid
-                    if low_idx < high_idx:
-                        band_ceps = cepstrum[i, j, k, low_idx:high_idx]
-                        mean = np.mean(band_ceps)
-                        std = np.std(band_ceps)
-                    else:
-                        mean = 0.0
-                        std = 0.0
+@jax.jit
+def _cepstrum_bands(
+    signal: Float[Array, "epochs frames channels samples"],
+    band_masks: Float[Array, "bands samples"],
+) -> Float[Array, "epochs frames channels features"]:
+    out_dtype = signal.dtype
+    compute_dtype = jnp.float32
 
-                    feats[i, j, k, b * 2] = mean  # Mean of the band
-                    feats[i, j, k, b * 2 + 1] = std  # Std of the band
+    signal = signal.astype(compute_dtype)
+    band_masks = band_masks.astype(compute_dtype)
+
+    n_samples = signal.shape[-1]
+
+    window = _hanning_window(n_samples, compute_dtype)
+    windowed = signal * window
+
+    spectrum = jnp.fft.rfft(windowed, axis=-1)
+    log_magnitude = jnp.log(jnp.abs(spectrum) + jnp.finfo(compute_dtype).eps)
+    cepstrum = jnp.fft.irfft(log_magnitude, n=n_samples, axis=-1)
+
+    counts = band_masks.sum(axis=1).astype(compute_dtype)
+    counts_safe = jnp.where(counts > 0, counts, 1.0)
+
+    means = jnp.einsum("...s,bs->...b", cepstrum, band_masks) / counts_safe
+    second_mom = jnp.einsum("...s,bs->...b", cepstrum**2, band_masks) / counts_safe
+    vars_ = jnp.maximum(second_mom - means**2, 0.0)
+    stds = jnp.sqrt(vars_)
+
+    means = jnp.where(counts > 0, means, 0.0)
+    stds = jnp.where(counts > 0, stds, 0.0)
+
+    feats = jnp.concatenate([means, stds], axis=-1)
+    return feats.astype(out_dtype)
 
 
 class CepstralFeatureExtractor:
-    def __init__(
-        self,
-        n_bands: int = 12,
-    ):
+    def __init__(self, n_bands: int = 8, device: jax.Device | None = None):
         self.n_bands = n_bands
         self.n_coef = n_bands * 2
+        self.device = device
 
     def feat_names(self, n_channels: int):
         return [
-            f"CEP{coef}{mode}_ch{ch}"
+            f"CEP{band}{suffix}_ch{ch}"
             for ch in range(n_channels)
-            for coef in range(self.n_bands)
-            for mode in ["-mean", "-std"]
+            for band in range(self.n_bands)
+            for suffix in ("-mean", "-std")
         ]
 
-    def _compute_band_edges(self, n_ceps: int):
-        n_ceps = int(n_ceps / 2)  # Length of the first half of the cepstrum
-        band_edges = [1]  # Start from index 1 to exclude the zeroth quefrency
+    def get_feats(
+        self,
+        X: Float[np.ndarray, "n_epochs n_frames n_channels n_samples"],
+    ) -> Float[Array, "n_epochs n_frames n_channels n_features"]:
+        if isinstance(X, jax.Array):
+            if X.ndim != 4:
+                raise ValueError(
+                    "Input must have shape (n_epochs, n_frames, n_channels, n_samples)."
+                )
 
-        # Calculate exponentially increasing indices
-        for i in range(1, self.n_bands + 1):
-            edge = int(n_ceps ** (i / self.n_bands))
-            band_edges.append(min(edge, n_ceps))  # Ensure edge does not exceed n_ceps
+            arr = X
+            if not np.issubdtype(np.dtype(arr.dtype), np.floating):
+                arr = arr.astype(jnp.float32)
+            device_dtype = jax.dtypes.canonicalize_dtype(arr.dtype)
+            signal = ensure_device_array(arr, device=self.device, dtype=device_dtype)
+            n_samples = arr.shape[-1]
+        else:
+            X_np = np.asarray(X)
+            if X_np.ndim != 4:
+                raise ValueError(
+                    "Input must have shape (n_epochs, n_frames, n_channels, n_samples)."
+                )
 
-        return band_edges
+            if not np.issubdtype(X_np.dtype, np.floating):
+                X_np = X_np.astype(np.float32)
 
-    def get_feats(self, X):
-        # Compute cepstrum for the entire array
-        n_samples = X.shape[-1]
-        window = np.hanning(n_samples)
-        cepstrum = compute_cepstrum(X * window)
+            device_dtype = jax.dtypes.canonicalize_dtype(X_np.dtype)
+            signal = ensure_device_array(X_np, device=self.device, dtype=device_dtype)
+            n_samples = X_np.shape[-1]
 
-        # Compute band edges
-        band_edges = self._compute_band_edges(cepstrum.shape[-1])
+        band_edges = _compute_band_edges(n_samples, self.n_bands)
 
-        # Initialize an empty array for features
-        feats = np.empty(
-            (X.shape[0], X.shape[1], X.shape[2], self.n_coef)
-        )  # times 2 for mean and std
+        mask = np.zeros((self.n_bands, n_samples), dtype=np.float32)
+        for idx in range(self.n_bands):
+            low = band_edges[idx]
+            high = band_edges[idx + 1]
+            mask[idx, low:high] = 1.0
 
-        # Fill the feats matrix using the Numba-accelerated function
-        fill_feats(cepstrum, np.array(band_edges, dtype=int), feats)
+        band_masks = ensure_device_array(mask, device=self.device, dtype=device_dtype)
 
-        return feats
+        stats = _cepstrum_bands(signal, band_masks)
+
+        if bool(jnp.any(jnp.isnan(stats))):
+            raise ValueError(
+                "NaN or Inf found in cepstral features; verify input data."
+            )
+
+        return stats
