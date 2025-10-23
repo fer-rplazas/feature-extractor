@@ -1,5 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 
+from time import perf_counter
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -31,7 +33,9 @@ def _resolve_device(device: str | jax.Device | None) -> jax.Device | None:
         try:
             devices = jax.devices(device)
         except RuntimeError as err:
-            raise ValueError(f"No JAX devices available for platform '{device}'.") from err
+            raise ValueError(
+                f"No JAX devices available for platform '{device}'."
+            ) from err
         if not devices:
             raise ValueError(f"No JAX devices available for platform '{device}'.")
         return devices[0]
@@ -55,8 +59,9 @@ class FeatureExtractor:
         coherence_kwargs: dict | None = None,
         plv_kwargs: dict | None = None,
         psi_kwargs: dict | None = None,
-        device: str | jax.Device | None = None,
+        device: str | jax.Device | None = "cpu",
     ):
+
         self.fs = fs
         self.win_sizes = win_sizes or [
             int(0.5 * self.fs),
@@ -88,6 +93,7 @@ class FeatureExtractor:
     def calculate_features(
         self, data: Float[np.ndarray, "n_epochs n_channels n_samples"]
     ):
+
         dtype = data.dtype if isinstance(data, jax.Array) else np.asarray(data).dtype
         data_device = ensure_device_array(
             data,
@@ -127,7 +133,7 @@ class FeatureExtractor:
 
         return self
 
-    def causal_bl_correct(self, winsor_limit: float = 0.02, len_time: float = 5.0):
+    def causal_bl_correct(self, len_time: float = 5.0):
         if not hasattr(self, "features"):
             raise ValueError(
                 "Features have not been calculated yet -- call `calculate_features` first"
@@ -137,7 +143,7 @@ class FeatureExtractor:
         len_samples = int(len_time / dt)
 
         self.features.values = causal_bl_correct(
-            self.features.values, winsor_limit, len_samples, device=self.device
+            self.features.values, len_scale=len_samples, device=self.device
         )
 
     def label_from_frame_time(self, t_cutoff: float, n_epochs: int):
@@ -190,7 +196,7 @@ class FeatureExtractor:
         self,
         mode: str,
         framed: Float[jax.Array, "n_epochs n_frames n_channels n_samples"],
-        t_framed: Float[np.ndarray, "n_frames"],
+        t_framed: Float[jax.Array, "n_frames"],
     ) -> list[xr.DataArray]:
         features_xr_cont = []
         framed_np: np.ndarray | None = None
@@ -200,15 +206,15 @@ class FeatureExtractor:
             time_kwargs.setdefault("device", self.device)
             time_ext = TimeDomainFeatureExtractor(**time_kwargs)
             feats = time_ext.get_feats(framed)
+
             feats = feats.reshape(feats.shape[:-2] + (-1,))
-            feats_np = to_numpy(feats)
 
             features_xr_cont.append(
                 xr.DataArray(
-                    feats_np,
+                    feats,
                     dims=["epoch", "frame", "feature_name"],
                     coords={
-                        "epoch": np.arange(feats_np.shape[0]),
+                        "epoch": jnp.arange(feats.shape[0]),
                         "frame": t_framed.reshape(-1),
                         "feature_name": time_ext.feat_names(framed.shape[2]),
                     },
@@ -261,14 +267,13 @@ class FeatureExtractor:
             cepstrum_ext = CepstralFeatureExtractor(**cepstrum_kwargs)
             feats = cepstrum_ext.get_feats(framed)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
-            feats_np = to_numpy(feats)
 
             features_xr_cont.append(
                 xr.DataArray(
-                    feats_np,
+                    feats,
                     dims=["epoch", "frame", "feature_name"],
                     coords={
-                        "epoch": np.arange(feats_np.shape[0]),
+                        "epoch": jnp.arange(feats.shape[0]),
                         "frame": t_framed.reshape(-1),
                         "feature_name": cepstrum_ext.feat_names(framed.shape[2]),
                     },
@@ -281,14 +286,13 @@ class FeatureExtractor:
             periodogram_ext = PeriodogramFeatureExtractor(**periodogram_kwargs)
             feats = periodogram_ext.get_feats(framed, fs=self.fs)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
-            feats_np = to_numpy(feats)
 
             features_xr_cont.append(
                 xr.DataArray(
-                    feats_np,
+                    feats,
                     dims=["epoch", "frame", "feature_name"],
                     coords={
-                        "epoch": np.arange(feats_np.shape[0]),
+                        "epoch": jnp.arange(feats.shape[0]),
                         "frame": t_framed.reshape(-1),
                         "feature_name": periodogram_ext.feat_names(framed.shape[2]),
                     },
@@ -298,19 +302,17 @@ class FeatureExtractor:
         elif mode == "periodogram_norm":
             periodogram_kwargs = dict(self.periodogram_kwargs)
             periodogram_kwargs.setdefault("device", self.device)
-            periodogram_ext = PeriodogramFeatureExtractor(
-                **periodogram_kwargs, normalize=True
-            )
+            periodogram_kwargs["normalize"] = True
+            periodogram_ext = PeriodogramFeatureExtractor(**periodogram_kwargs)
             feats = periodogram_ext.get_feats(framed, fs=self.fs)
             feats = feats.reshape(feats.shape[:-2] + (-1,))
-            feats_np = to_numpy(feats)
 
             features_xr_cont.append(
                 xr.DataArray(
-                    feats_np,
+                    feats,
                     dims=["epoch", "frame", "feature_name"],
                     coords={
-                        "epoch": np.arange(feats_np.shape[0]),
+                        "epoch": jnp.arange(feats.shape[0]),
                         "frame": t_framed.reshape(-1),
                         "feature_name": periodogram_ext.feat_names(framed.shape[2]),
                     },
@@ -409,6 +411,7 @@ class FeatureExtractor:
         win_size: int,
         mode_workers: int = 1,
     ):
+
         framed = create_trailing_frames(
             data,
             win_size,
@@ -416,7 +419,7 @@ class FeatureExtractor:
             self.initial_offset,
             device=self.device,
         )
-        t = jnp.arange(data.shape[-1], dtype=jnp.float32) / self.fs
+        t = jnp.arange(data.shape[-1], dtype=jnp.float32, device=self.device) / self.fs
         t = t.reshape(1, 1, -1)
         t_framed = create_trailing_frames(
             t,
@@ -426,13 +429,12 @@ class FeatureExtractor:
             device=self.device,
         )
         t_framed = jnp.squeeze(t_framed[..., -1])
-        t_framed_np = to_numpy(t_framed)
 
         if mode_workers > 1 and len(self.modes) > 1:
             max_workers = min(mode_workers, len(self.modes))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [
-                    executor.submit(self._process_mode, mode, framed, t_framed_np)
+                    executor.submit(self._process_mode, mode, framed, t_framed)
                     for mode in self.modes
                 ]
                 features_dicts = []
@@ -441,6 +443,9 @@ class FeatureExtractor:
         else:
             features_dicts = []
             for mode in self.modes:
-                features_dicts.extend(self._process_mode(mode, framed, t_framed_np))
+                features_dicts.extend(self._process_mode(mode, framed, t_framed))
 
-        return xr.concat(features_dicts, dim="feature_name")
+        def concat_feats(features_dicts: list[xr.DataArray]) -> xr.DataArray:
+            return xr.concat(features_dicts, dim="feature_name")
+
+        return concat_feats(features_dicts)

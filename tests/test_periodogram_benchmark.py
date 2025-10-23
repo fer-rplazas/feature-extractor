@@ -86,7 +86,9 @@ def test_periodogram_benchmark(
     rng = np.random.default_rng(321)
     X = _random_epoch(rng, n_epochs, n_frames, n_channels, n_samples)
 
-    to_numpy(extractor.get_feats(X, sampling_rate))  # warmup to exclude JIT compile time
+    to_numpy(
+        extractor.get_feats(X, sampling_rate)
+    )  # warmup to exclude JIT compile time
 
     start = time.perf_counter()
     feats = to_numpy(extractor.get_feats(X, sampling_rate))

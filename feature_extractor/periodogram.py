@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from functools import partial
 from typing import Sequence, Self
 
@@ -12,23 +10,11 @@ from .assets import default_canonical_freq_bands
 from .utils import ensure_device_array
 
 
-def _hanning(length: int, dtype: jnp.dtype) -> Array:
-    """Custom Hanning window because jnp.hanning is not available in older JAX."""
-    if length <= 0:
-        raise ValueError("Signal length must be a positive integer.")
-
-    if length == 1:
-        return jnp.ones((1,), dtype=dtype)
-
-    indices = jnp.arange(length, dtype=dtype)
-    return 0.5 - 0.5 * jnp.cos(2.0 * jnp.pi * indices / (length - 1))
-
-
 @partial(jax.jit, static_argnames=("normalize",))
 def _extract_features(
     X: Float[Array, "epochs frames channels samples"],
     fs: float,
-    band_edges: Float[Array, "bands two"],
+    band_edges: Float[Array, "bands 2"],
     normalization_cutoff: float,
     *,
     normalize: bool,
@@ -36,7 +22,7 @@ def _extract_features(
     signal_dtype = X.dtype
     n_samples = X.shape[-1]
 
-    window = _hanning(n_samples, signal_dtype)
+    window = jnp.hanning(n_samples)
     windowed = X * window
 
     freqs = jnp.fft.rfftfreq(n_samples, d=1.0 / fs)
@@ -111,35 +97,19 @@ class PeriodogramFeatureExtractor:
 
     def get_feats(
         self,
-        X: Float[np.ndarray, "n_epochs n_frames n_channels n_samples"],
+        X: Float[Array, "n_epochs n_frames n_channels n_samples"],
         fs: float,
     ) -> Float[Array, "n_epochs n_frames n_channels n_features"]:
-        if isinstance(X, jax.Array):
-            if X.ndim != 4:
-                raise ValueError(
-                    "Input X must have shape (n_epochs, n_frames, n_channels, n_samples)."
-                )
-            arr = X
-            if not np.issubdtype(np.dtype(arr.dtype), np.floating):
-                arr = arr.astype(jnp.float32)
-            device_dtype = jax.dtypes.canonicalize_dtype(arr.dtype)
-            X_device = ensure_device_array(arr, device=self.device, dtype=device_dtype)
-            n_samples = arr.shape[-1]
-        else:
-            X_np = np.asarray(X)
-            if X_np.ndim != 4:
-                raise ValueError(
-                    "Input X must have shape (n_epochs, n_frames, n_channels, n_samples)."
-                )
-            if not np.issubdtype(X_np.dtype, np.floating):
-                X_np = X_np.astype(np.float32)
-            device_dtype = jax.dtypes.canonicalize_dtype(X_np.dtype)
-            X_device = ensure_device_array(X_np, device=self.device, dtype=device_dtype)
-            n_samples = X_np.shape[-1]
 
-        if fs <= 0:
-            raise ValueError("Sampling frequency must be positive.")
+        assert (
+            X.ndim == 4
+        ), "Input X must have shape (n_epochs, n_frames, n_channels, n_samples)."
+        assert fs > 0, "Sampling frequency must be positive."
 
+        X = ensure_device_array(X, device=self.device)
+        n_samples = X.shape[-1]
+
+        # Compute frequency bins and validate band coverage
         freqs = np.fft.rfftfreq(n_samples, d=1.0 / fs)
         band_masks = (freqs[None, :] >= self._band_edges[:, :1]) & (
             freqs[None, :] < self._band_edges[:, 1:]
@@ -151,17 +121,16 @@ class PeriodogramFeatureExtractor:
                 "consider relaxing the band edges or increasing signal length."
             )
 
-        band_edges = ensure_device_array(
-            self._band_edges, device=self.device, dtype=device_dtype
-        )
+        band_edges = ensure_device_array(self._band_edges, device=self.device)
 
         feats = self._compiled(
-            X_device,
+            X,
             float(fs),
             band_edges,
             float(self.normalization_cutoff),
             normalize=self.normalize,
         )
+
         if bool(jnp.any(jnp.isnan(feats))):
             raise ValueError(
                 "NaN values found in features during periodogram-based feature "
